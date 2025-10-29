@@ -6,10 +6,15 @@ import { Toaster, toast } from 'react-hot-toast';
 export default function Home() {
   const [isDispatching, setIsDispatching] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [repoUrl, setRepoUrl] = useState('');
 
   const handleDispatchNow = async () => {
     setIsDispatching(true);
-    const promise = fetch('/api/start', { method: 'POST' });
+    const promise = fetch('/api/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(repoUrl ? { repoUrl } : {}),
+    });
     toast.promise(promise, {
       loading: 'جاري بدء البث...',
       success: 'تم إرسال طلب بدء البث بنجاح!',
@@ -19,7 +24,11 @@ export default function Home() {
 
   const handleStop = async () => {
     setIsStopping(true);
-    const promise = fetch('/api/stop', { method: 'POST' });
+    const promise = fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(repoUrl ? { repoUrl } : {}),
+    });
     toast.promise(promise, {
       loading: 'جاري إرسال طلب الإيقاف...',
       success: (res) => {
@@ -46,6 +55,17 @@ export default function Home() {
           <div style={{ textAlign: 'center' }}>
             <h1 className="card-title">تحكم في بث GitHub</h1>
             <p className="card-subtitle">ابدأ أو أوقف بث GitHub Actions.</p>
+          </div>
+
+          <div className="input-group" style={{ marginBottom: '1rem' }}>
+            <input
+              type="text"
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              placeholder="رابط ملف workflow على GitHub (اختياري)"
+              className="input"
+              dir="ltr"
+            />
           </div>
 
           <div className="button-group">

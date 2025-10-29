@@ -3,15 +3,22 @@ import { getLatestInProgressRun, cancelWorkflowRun } from '../../../lib/github';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
+export async function POST(request) {
   try {
-    const latestRun = await getLatestInProgressRun();
+    let overrides = {};
+    try {
+      overrides = await request.json();
+    } catch {
+      overrides = {};
+    }
+
+    const latestRun = await getLatestInProgressRun(overrides);
 
     if (!latestRun) {
       return NextResponse.json({ message: 'No workflow run is currently in progress or queued.' }, { status: 404 });
     }
 
-    await cancelWorkflowRun(latestRun.id);
+    await cancelWorkflowRun(latestRun.id, overrides);
 
     return NextResponse.json({ message: `Successfully requested cancellation for workflow run #${latestRun.run_number}.` });
 
