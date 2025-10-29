@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { dispatchWorkflow } from '@/lib/github';
+import { dispatchWorkflow } from '../../../lib/github';
 
 export const dynamic = 'force-dynamic';
 
