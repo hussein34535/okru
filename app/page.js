@@ -23,13 +23,6 @@ export default function Home() {
   const [isStopping, setIsStopping] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [savedRepos, setSavedRepos] = useState([]);
-  const [startDelayMin, setStartDelayMin] = useState('');
-  const [autoStopMin, setAutoStopMin] = useState('');
-  const [countdownSec, setCountdownSec] = useState(0);
-  const [isCountdownActive, setIsCountdownActive] = useState(false);
-  const [scheduleTimer, setScheduleTimer] = useState(null);
-  const [stopTimer, setStopTimer] = useState(null);
-  const [countdownTimer, setCountdownTimer] = useState(null);
   const [runsByUrl, setRunsByUrl] = useState({});
   const [nowTs, setNowTs] = useState(Date.now());
 
@@ -161,33 +154,7 @@ export default function Home() {
     }
   };
 
-  const scheduleStart = () => {
-    const delay = parseInt(startDelayMin, 10);
-    if (!Number.isFinite(delay) || delay <= 0) { toast.error('أدخل تأخير بالدقائق (> 0)'); return; }
-    if (isCountdownActive) { toast('هناك مؤقت قيد العمل'); return; }
-    const urlToRun = repoUrl.trim();
-    if (!urlToRun) { toast.error('حدد رابطًا للتشغيل المؤقت'); return; }
-
-    const totalSec = delay * 60; setCountdownSec(totalSec); setIsCountdownActive(true);
-    const ct = setInterval(() => { setCountdownSec((s) => { if (s <= 1) { clearInterval(ct); return 0; } return s - 1; }); }, 1000); setCountdownTimer(ct);
-    
-    const st = setTimeout(async () => {
-      setIsCountdownActive(false);
-      await startWithUrl(urlToRun);
-      const stopM = parseInt(autoStopMin, 10);
-      if (Number.isFinite(stopM) && stopM > 0) {
-        const t = setTimeout(async () => { await stopWithUrl(urlToRun); }, stopM * 60 * 1000);
-        setStopTimer(t); toast('سَيتم الإيقاف التلقائي بعد انتهاء المدة');
-      }
-    }, totalSec * 1000);
-    setScheduleTimer(st); toast.success('تم تعيين مؤقت للتشغيل');
-  };
-
-  const cancelScheduled = () => {
-    if (scheduleTimer) clearTimeout(scheduleTimer);
-    if (countdownTimer) clearInterval(countdownTimer);
-    setScheduleTimer(null); setCountdownTimer(null); setIsCountdownActive(false); setCountdownSec(0); toast('تم إلغاء المؤقت');
-  };
+  
 
   const grouped = savedRepos.reduce((acc, url) => { const meta = parseWorkflowUrl(url); const key = meta ? `${meta.owner}/${meta.repo}` : 'روابط غير معروفة'; if (!acc[key]) acc[key] = []; acc[key].push({ url, meta }); return acc; }, {});
 
@@ -203,17 +170,9 @@ export default function Home() {
             <p className="card-subtitle">ابدأ أو أوقف بث GitHub Actions.</p>
           </div>
 
-          <div className="input-group" style={{ marginBottom: '0.75rem' }}>
+          <div className="input-group">
             <input type="text" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="رابط ملف workflow على GitHub" className="input" dir="ltr" />
-            <div style={{ height: '0.5rem' }} />
-            <div className="inputs-row">
-              <input type="number" min="1" className="input number" placeholder="تأخير بالدقائق" value={startDelayMin} onChange={(e) => setStartDelayMin(e.target.value)} />
-              <input type="number" min="1" className="input number" placeholder="مدة التشغيل بالدقائق" value={autoStopMin} onChange={(e) => setAutoStopMin(e.target.value)} />
-              {!isCountdownActive ? (<button onClick={scheduleStart} className="btn-secondary">تشغيل مؤقت</button>) : (<button onClick={cancelScheduled} className="btn-stop">إلغاء المؤقت</button>)}
-            </div>
-            {isCountdownActive && (<div className="countdown">سيبدأ خلال: {Math.floor(countdownSec / 60)}:{String(countdownSec % 60).padStart(2, '0')}</div>)}
-            <div style={{ height: '0.5rem' }} />
-            <button onClick={saveCurrentRepo} className="btn-secondary" disabled={!repoUrl.trim()}>حفظ الرابط</button>
+            <button onClick={saveCurrentRepo} className="btn-primary" disabled={!repoUrl.trim()}>حفظ الرابط</button>
           </div>
 
           {Object.keys(grouped).length > 0 && (
@@ -232,18 +191,24 @@ export default function Home() {
                       return (
                         <div className="saved-item" key={url}>
                           <div className="item-url" title={url}>
-                            {meta ? (<><span>{meta.file}</span><span className="chip" style={{ marginInlineStart: '0.5rem' }}>{meta.ref}</span></>) : (<span>{url}</span>)}
-                            <span className={`chip ${isRun ? 'chip-green' : 'chip-gray'}`} style={{ marginInlineStart: '0.5rem' }}>{isRun ? 'شغال' : 'متوقف'}</span>
-                            {isRun && <span className="chip" style={{ marginInlineStart: '0.5rem' }}>{formatElapsed(elapsed)}</span>}
-                          </div>
-                          <div className="item-actions">
-                            <button className="btn-secondary btn-sm" disabled={isDispatching || isStopping} onClick={() => startWithUrl(url)}>تشغيل</button>
-                            <button className="btn-stop btn-sm" disabled={isStopping || isDispatching} onClick={() => stopWithUrl(url)}>إيقاف</button>
-                            <button className="btn-icon" onClick={() => { setRepoUrl(url); toast('تم إدراج الرابط في الحقل'); }}>استخدام</button>
-                            <button className="btn-icon" onClick={() => removeRepo(url)}>حذف</button>
-                          </div>
-                        </div>
-                      );
+                            <span className="item-url-text">
+                             {meta ? `${meta.file} (${meta.ref})` : url}
+                            </span>
+                             <span className={`chip ${isRun ? 'chip-green' : 'chip-gray'}`}>{isRun ? 'شغال' : 'متوقف'}</span>
+                             {isRun && <span className="chip chip-gray">{formatElapsed(elapsed)}</span>}
+                           </div>
+                           <div className="item-actions">
+                             <button className="btn-start btn-sm" disabled={isDispatching || isStopping} onClick={() => startWithUrl(url)}>تشغيل</button>
+                             <button className="btn-stop btn-sm" disabled={isStopping || isDispatching} onClick={() => stopWithUrl(url)}>إيقاف</button>
+                             <button className="btn-icon" onClick={() => { setRepoUrl(url); toast('تم إدراج الرابط في الحقل'); }} title="استخدام الرابط">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path></svg>
+                             </button>
+                             <button className="btn-icon" onClick={() => removeRepo(url)} title="حذف الرابط">
+                               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                             </button>
+                           </div>
+                         </div>
+                       );
                     })}
                   </div>
                 </div>
