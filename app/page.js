@@ -2,63 +2,72 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
+import Image from 'next/image';
 
-function parseWorkflowUrl(repoUrl) {
+function extractNameFromUrl(url) {
   try {
-    const url = new URL(repoUrl);
-    const parts = url.pathname.split('/').filter(Boolean);
-    if (parts.length < 5) return null;
-    const owner = parts[0];
-    const repo = parts[1];
-    const ref = parts[3];
-    const file = parts[parts.length - 1];
-    return { owner, repo, ref, file };
+    const path = new URL(url).pathname;
+    const parts = path.split('/');
+    // Expected: /owner/repo/blob/branch/.github/workflows/file.yml
+    if (parts.length > 6 && parts[parts.length - 2] === 'workflows') {
+      return parts[parts.length - 1];
+    }
+    return 'Untitled';
   } catch {
-    return null;
+    return 'Untitled';
   }
 }
 
 export default function Home() {
-  const [isDispatching, setIsDispatching] = useState(false);
-  const [isStopping, setIsStopping] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
+  const [repoName, setRepoName] = useState('');
   const [savedRepos, setSavedRepos] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isStopping, setIsStopping] = useState({});
   const [runsByUrl, setRunsByUrl] = useState({});
-  const [nowTs, setNowTs] = useState(Date.now());
   const [elapsedTimes, setElapsedTimes] = useState({});
 
-  useEffect(() => {
-    try {
-      const rawRepos = localStorage.getItem('savedRepos');
-      const rawRuns = localStorage.getItem('runsByUrl');
-      const saved = rawRepos ? JSON.parse(rawRepos) : [];
-      const runs = rawRuns ? JSON.parse(rawRuns) : {};
-      
-      const prunedRuns = {};
-      if (Array.isArray(saved) && runs && typeof runs === 'object') {
-        for (const url of saved) {
-          if (runs[url]) {
-            prunedRuns[url] = runs[url];
-          }
-        }
-      }
-      
-      setSavedRepos(Array.isArray(saved) ? saved : []);
-      setRunsByUrl(prunedRuns);
-    } catch (e) {
-      console.error("Failed to load from localStorage", e);
-      setSavedRepos([]);
-      setRunsByUrl({});
-    }
+  const persistRuns = useCallback((runs) => {
+    localStorage.setItem('runsByUrl', JSON.stringify(runs));
   }, []);
 
-  const persistRuns = useCallback((newRuns) => {
-    try {
-      localStorage.setItem('runsByUrl', JSON.stringify(newRuns));
-    } catch (e) {
-      console.error("Failed to save runs to localStorage", e);
+  useEffect(() => {
+    // Atomically load and prune state from localStorage
+    const savedReposRaw = localStorage.getItem('savedRepos');
+    const runsByUrlRaw = localStorage.getItem('runsByUrl');
+
+    const loadedRepos = savedReposRaw ? JSON.parse(savedReposRaw) : [];
+    const loadedRuns = runsByUrlRaw ? JSON.parse(runsByUrlRaw) : {};
+
+    // Backwards compatibility: convert string URLs to repo objects
+    const migratedRepos = loadedRepos.map(repo => {
+      if (typeof repo === 'string') {
+        return { url: repo, name: extractNameFromUrl(repo), id: repo };
+      }
+      // Ensure all items have a unique ID
+      if (!repo.id) {
+        repo.id = repo.url;
+      }
+      return repo;
+    });
+
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const now = Date.now();
+    const prunedRuns = Object.entries(loadedRuns).reduce((acc, [url, run]) => {
+      if (run && run.startTime && (now - run.startTime < SIX_HOURS_MS)) {
+        acc[url] = run;
+      }
+      return acc;
+    }, {});
+
+    setSavedRepos(migratedRepos);
+    setRunsByUrl(prunedRuns);
+
+    if (JSON.stringify(prunedRuns) !== JSON.stringify(loadedRuns)) {
+      persistRuns(prunedRuns);
     }
-  }, []);
+  }, [persistRuns]);
+
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -91,102 +100,6 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [runsByUrl, persistRuns]);
 
-  const persistRepos = (list) => { 
-    setSavedRepos(list); 
-    try { localStorage.setItem('savedRepos', JSON.stringify(list)); } catch {} 
-  };
-
-  const saveCurrentRepo = () => {
-    const url = repoUrl.trim();
-    if (!url) { toast.error('أدخل رابطًا أولًا'); return; }
-    if (savedRepos.includes(url)) { toast('الرابط محفوظ مسبقًا'); return; }
-    const next = [url, ...savedRepos].slice(0, 50); 
-    persistRepos(next); 
-    toast.success('تم حفظ الرابط');
-  };
-
-  const removeRepo = (url) => {
-    const nextRepos = savedRepos.filter((u) => u !== url);
-    persistRepos(nextRepos);
-    setRunsByUrl((currentRuns) => {
-      const nextRuns = { ...currentRuns };
-      delete nextRuns[url];
-      persistRuns(nextRuns);
-      return nextRuns;
-    });
-    toast.success('تم حذف الرابط');
-  };
-
-  const startWithUrl = async (url) => {
-    setIsDispatching(true);
-    const pressedAt = Date.now();
-    
-    setRunsByUrl(currentRuns => {
-      const next = { ...currentRuns, [url]: { isRunning: true, startedAt: pressedAt } };
-      persistRuns(next);
-      return next;
-    });
-
-    const promise = fetch('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoUrl: url }) });
-    
-    toast.promise(promise, {
-      loading: 'جاري بدء البث...',
-      success: 'تم إرسال طلب بدء البث بنجاح!',
-      error: 'فشل الطلب. تحقق من الإعدادات والمتغيرات.'
-    });
-
-    try {
-      const res = await promise;
-      if (!res.ok) throw new Error("Server responded with an error");
-    } catch (e) {
-      setRunsByUrl(currentRuns => {
-        const next = { ...currentRuns, [url]: { isRunning: false, startedAt: null } };
-        persistRuns(next);
-        return next;
-      });
-    } finally {
-      setIsDispatching(false);
-    }
-  };
-
-  const stopWithUrl = async (url) => {
-    setIsStopping(true);
-    const prev = runsByUrl[url] || { isRunning: false, startedAt: null };
-
-    setRunsByUrl(currentRuns => {
-      const next = { ...currentRuns, [url]: { isRunning: false, startedAt: null } };
-      persistRuns(next);
-      return next;
-    });
-
-    const promise = fetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoUrl: url }) });
-
-    toast.promise(promise, {
-      loading: 'جاري إرسال طلب الإيقاف...',
-      success: 'تم إرسال طلب الإيقاف بنجاح!',
-      error: 'لم يتم العثور على بث لإيقافه.'
-    });
-
-    try {
-      const res = await promise;
-      if (!res.ok) throw new Error("Server responded with an error");
-    } catch (e) {
-      setRunsByUrl(currentRuns => {
-        const next = { ...currentRuns, [url]: prev };
-        persistRuns(next);
-        return next;
-      });
-    } finally {
-      setIsStopping(false);
-    }
-  };
-
-  
-
-  const grouped = savedRepos.reduce((acc, url) => { const meta = parseWorkflowUrl(url); const key = meta ? `${meta.owner}/${meta.repo}` : 'روابط غير معروفة'; if (!acc[key]) acc[key] = []; acc[key].push({ url, meta }); return acc; }, {});
-
-  const formatElapsed = (s) => { const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); const ss = s % 60; return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`; };
-
   const formatElapsedTime = (ms) => {
     const totalSeconds = Math.floor(ms / 1000);
     const h = Math.floor(totalSeconds / 3600);
@@ -195,61 +108,204 @@ export default function Home() {
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  const persistRepos = (list) => { 
+    localStorage.setItem('savedRepos', JSON.stringify(list));
+  };
+  
+  const saveCurrentRepo = () => {
+    if (!repoUrl || !repoUrl.startsWith('https://github.com')) {
+      toast.error('Please enter a valid GitHub workflow URL.');
+      return;
+    }
+    if (savedRepos.some(r => r.url === repoUrl)) {
+      toast.error('This repository URL is already saved.');
+      return;
+    }
+    const nameToSave = repoName.trim() || extractNameFromUrl(repoUrl);
+    const newRepo = { url: repoUrl, name: nameToSave, id: repoUrl };
+    const updatedRepos = [...savedRepos, newRepo];
+    setSavedRepos(updatedRepos);
+    persistRepos(updatedRepos);
+    setRepoUrl('');
+    setRepoName('');
+    toast.success('Repository saved!');
+  };
+
+  const removeRepo = (urlToRemove) => {
+    const updatedRepos = savedRepos.filter(repo => repo.url !== urlToRemove);
+    setSavedRepos(updatedRepos);
+    persistRepos(updatedRepos);
+    toast.success('Repository removed.');
+  };
+
+  const startWithUrl = async (url) => {
+    setIsLoading(true);
+    const promise = fetch('/api/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl: url }),
+    }).then(res => {
+      if (!res.ok) throw new Error('Failed to start.');
+      return res.json();
+    });
+
+    toast.promise(promise, {
+      loading: 'Starting stream...',
+      success: (data) => {
+        const nextRuns = {
+          ...runsByUrl,
+          [url]: { startTime: Date.now(), runUrl: data.runUrl || '#' },
+        };
+        setRunsByUrl(nextRuns);
+        persistRuns(nextRuns);
+        return 'Stream started successfully!';
+      },
+      error: (err) => {
+        return `Error: ${err.message}`;
+      }
+    });
+
+    setIsLoading(false);
+  };
+  
+  const stopWithUrl = async (url) => {
+    setIsStopping(prev => ({ ...prev, [url]: true }));
+    const promise = fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl: url }),
+    }).then(res => {
+      if (!res.ok) throw new Error('Failed to stop.');
+      return res.json();
+    });
+
+    toast.promise(promise, {
+      loading: 'Stopping stream...',
+      success: () => {
+        const nextRuns = { ...runsByUrl };
+        delete nextRuns[url];
+        setRunsByUrl(nextRuns);
+        persistRuns(nextRuns);
+        return 'Stream stopped successfully!';
+      },
+      error: (err) => `Error: ${err.message}`,
+    });
+    
+    setIsStopping(prev => ({ ...prev, [url]: false }));
+  };
+
+  const groupedRepos = savedRepos.reduce((acc, repo) => {
+    try {
+      const url = new URL(repo.url);
+      const parts = url.pathname.split('/');
+      if (parts.length >= 3) {
+        const groupKey = `${parts[1]}/${parts[2]}`;
+        if (!acc[groupKey]) {
+          acc[groupKey] = [];
+        }
+        acc[groupKey].push(repo);
+        return acc;
+      }
+    } catch { /* ignore invalid urls */ }
+    if (!acc['Uncategorized']) acc['Uncategorized'] = [];
+    acc['Uncategorized'].push(repo);
+    return acc;
+  }, {});
+
+
   return (
     <>
-      <Toaster position="top-center" toastOptions={{ className: 'bg-gray-800 text-white', duration: 4000 }} />
+      <Toaster position="top-center" reverseOrder={false} />
       <main>
         <div className="card">
-          <div style={{ textAlign: 'center' }}>
-            <h1 className="card-title">تحكم في بث GitHub</h1>
-            <p className="card-subtitle">ابدأ أو أوقف بث GitHub Actions.</p>
+          <h1 className="card-title">Stream Control</h1>
+          <p className="card-subtitle">Manage your GitHub Actions workflow streams.</p>
+          
+          <div className="input-group mb-4">
+             <input
+              type="text"
+              className="input"
+              placeholder="Workflow Name (e.g., Bein Sports 1)"
+              value={repoName}
+              onChange={(e) => setRepoName(e.target.value)}
+            />
+            <input
+              type="url"
+              className="input"
+              placeholder="Paste GitHub Workflow URL..."
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+            />
+            <button className="btn-primary" onClick={saveCurrentRepo} disabled={!repoUrl}>
+              Save
+            </button>
           </div>
 
-          <div className="input-group">
-            <input type="text" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="رابط ملف workflow على GitHub" className="input" dir="ltr" />
-            <button onClick={saveCurrentRepo} className="btn-primary" disabled={!repoUrl.trim()}>حفظ الرابط</button>
-          </div>
-
-          {Object.keys(grouped).length > 0 && (
-            <div className="sections">
-              {Object.entries(grouped).map(([repoKey, items]) => (
-                <div className="section" key={repoKey}>
-                  <div className="section-header">
-                    <div className="repo-title">{repoKey}</div>
-                    <div className="count-badge">{items.length}</div>
-                  </div>
-                  <div className="section-items">
-                    {items.map(({ url, meta }) => {
-                      const run = runsByUrl[url];
-                      const isRun = !!run?.isRunning;
-                      const elapsed = run?.startedAt ? Math.max(0, Math.floor((nowTs - run.startedAt) / 1000)) : 0;
-                      return (
-                        <div className="saved-item" key={url}>
-                          <div className="item-url" title={url}>
-                            <span className="item-url-text">
-                             {meta ? `${meta.file} (${meta.ref})` : url}
-                            </span>
-                             <span className={`chip ${isRun ? 'chip-green' : 'chip-gray'}`}>{isRun ? 'شغال' : 'متوقف'}</span>
-                             {isRun && <span className="chip chip-gray">{formatElapsed(elapsed)}</span>}
-                           </div>
-                           <div className="item-actions">
-                             <button className="btn-start btn-sm" disabled={isDispatching || isStopping} onClick={() => startWithUrl(url)}>تشغيل</button>
-                             <button className="btn-stop btn-sm" disabled={isStopping || isDispatching} onClick={() => stopWithUrl(url)}>إيقاف</button>
-                             <button className="btn-icon" onClick={() => { setRepoUrl(url); toast('تم إدراج الرابط في الحقل'); }} title="استخدام الرابط">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path></svg>
-                             </button>
-                             <button className="btn-icon" onClick={() => removeRepo(url)} title="حذف الرابط">
-                               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                             </button>
-                           </div>
-                         </div>
-                       );
-                    })}
-                  </div>
+          <div className="sections">
+            {Object.entries(groupedRepos).map(([groupName, repos]) => (
+              <div key={groupName} className="section">
+                <div className="section-header">
+                  <span className="repo-title">{groupName}</span>
+                  <span className="count-badge">{repos.length}</span>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="section-items">
+                  {repos.map((repo) => {
+                    const isRunning = !!runsByUrl[repo.url];
+                    const runData = runsByUrl[repo.url];
+
+                    return (
+                      <div key={repo.id} className="saved-item">
+                        <div className="item-url">
+                          <span className="item-url-text font-semibold">{repo.name}</span>
+                          {isRunning ? (
+                            <span className="chip chip-green">
+                              Running for {elapsedTimes[repo.url] || '...'}
+                            </span>
+                          ) : (
+                            <span className="chip chip-gray">Stopped</span>
+                          )}
+                        </div>
+                        <div className="item-actions">
+                          {isRunning ? (
+                            <>
+                              <button 
+                                onClick={() => stopWithUrl(repo.url)} 
+                                className="btn-stop btn-sm"
+                                disabled={isStopping[repo.url]}
+                              >
+                                {isStopping[repo.url] ? 'Stopping...' : 'Stop'}
+                              </button>
+                              <a
+                                href={runData.runUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn-icon btn-sm"
+                                title="View Logs on GitHub"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                  <path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294l4-13zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0zm6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0z"/>
+                                </svg>
+                              </a>
+                            </>
+                          ) : (
+                            <button onClick={() => startWithUrl(repo.url)} className="btn-start btn-sm" disabled={isLoading}>
+                              Start
+                            </button>
+                          )}
+                          <button onClick={() => removeRepo(repo.url)} className="btn-icon btn-sm" title="Remove">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                              <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                              <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
         <footer><p>تطبيق بسيط لتشغيل وإيقاف GitHub Actions.</p></footer>
       </main>
