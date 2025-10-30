@@ -26,6 +26,7 @@ export default function Home() {
   const [isStopping, setIsStopping] = useState({});
   const [runsByUrl, setRunsByUrl] = useState({});
   const [elapsedTimes, setElapsedTimes] = useState({});
+  const [editingRepo, setEditingRepo] = useState(null); // { id: string, name: string }
 
   const persistRuns = useCallback((runs) => {
     localStorage.setItem('runsByUrl', JSON.stringify(runs));
@@ -138,6 +139,83 @@ export default function Home() {
     toast.success('Repository removed.');
   };
 
+  const updateRepoName = (id, newName) => {
+    if (!newName.trim()) {
+      toast.error("Name cannot be empty.");
+      return;
+    }
+    const updatedRepos = savedRepos.map(repo => {
+      if (repo.id === id) {
+        return { ...repo, name: newName.trim() };
+      }
+      return repo;
+    });
+    setSavedRepos(updatedRepos);
+    persistRepos(updatedRepos);
+    setEditingRepo(null); // Exit editing mode
+    toast.success("Name updated successfully!");
+  };
+
+  const exportData = () => {
+    if (savedRepos.length === 0) {
+      toast.error("No data to export.");
+      return;
+    }
+    try {
+      const jsonString = JSON.stringify(savedRepos, null, 2);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'stream-control-backup.json';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success("Backup downloaded successfully!");
+    } catch (error) {
+      console.error('Export failed:', error);
+      toast.error("Failed to export data.");
+    }
+  };
+
+  const importData = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedRepos = JSON.parse(e.target.result);
+        if (!Array.isArray(importedRepos)) {
+          throw new Error("Invalid file format.");
+        }
+
+        // Filter out duplicates
+        const existingUrls = new Set(savedRepos.map(repo => repo.url));
+        const newRepos = importedRepos.filter(repo => repo.url && !existingUrls.has(repo.url));
+
+        if (newRepos.length === 0) {
+          toast.success("All repositories in the file are already saved.");
+          return;
+        }
+
+        const updatedRepos = [...savedRepos, ...newRepos];
+        setSavedRepos(updatedRepos);
+        persistRepos(updatedRepos);
+        toast.success(`${newRepos.length} new repositories imported successfully!`);
+
+      } catch (error) {
+        console.error('Import failed:', error);
+        toast.error(`Import failed: ${error.message}`);
+      } finally {
+        // Reset file input to allow re-uploading the same file
+        event.target.value = null;
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const startWithUrl = async (url) => {
     setIsLoading(true);
     const promise = fetch('/api/start', {
@@ -239,6 +317,17 @@ export default function Home() {
             <button className="btn-primary" onClick={saveCurrentRepo} disabled={!repoUrl}>
               Save
             </button>
+            <button onClick={exportData} className="btn-icon" title="Export Data">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M3 12v1h10v-1H3zM8 11L13 6h-3V2H6v4H3l5 5z"/>
+              </svg>
+            </button>
+            <label htmlFor="import-file" className="btn-icon cursor-pointer" title="Import Data">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M3 12v1h10v-1H3zM8 2l-5 5h3v4h4V7h3l-5-5z"/>
+              </svg>
+              <input type="file" id="import-file" accept=".json" className="hidden" onChange={importData} />
+            </label>
           </div>
 
           <div className="sections">
@@ -256,7 +345,22 @@ export default function Home() {
                     return (
                       <div key={repo.id} className="saved-item">
                         <div className="item-url">
-                          <span className="item-url-text font-semibold">{repo.name}</span>
+                          {editingRepo && editingRepo.id === repo.id ? (
+                             <input
+                              type="text"
+                              value={editingRepo.name}
+                              onChange={(e) => setEditingRepo({ ...editingRepo, name: e.target.value })}
+                              className="input input-sm"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') updateRepoName(repo.id, editingRepo.name);
+                                if (e.key === 'Escape') setEditingRepo(null);
+                              }}
+                            />
+                          ) : (
+                            <span className="item-url-text font-semibold">{repo.name}</span>
+                          )}
+
                           {isRunning ? (
                             <span className="chip chip-green">
                               Running for {elapsedTimes[repo.url] || '...'}
@@ -266,38 +370,53 @@ export default function Home() {
                           )}
                         </div>
                         <div className="item-actions">
-                          {isRunning ? (
+                          {editingRepo && editingRepo.id === repo.id ? (
                             <>
-                              <button 
-                                onClick={() => stopWithUrl(repo.url)} 
-                                className="btn-stop btn-sm"
-                                disabled={isStopping[repo.url]}
-                              >
-                                {isStopping[repo.url] ? 'Stopping...' : 'Stop'}
-                              </button>
-                              <a
-                                href={runData.runUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="btn-icon btn-sm"
-                                title="View Logs on GitHub"
-                              >
+                              <button onClick={() => updateRepoName(repo.id, editingRepo.name)} className="btn-start btn-sm">Save</button>
+                              <button onClick={() => setEditingRepo(null)} className="btn-icon btn-sm" title="Cancel">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                                  <path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294l4-13zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0zm6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0z"/>
+                                  <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z"/>
                                 </svg>
-                              </a>
+                              </button>
                             </>
                           ) : (
-                            <button onClick={() => startWithUrl(repo.url)} className="btn-start btn-sm" disabled={isLoading}>
-                              Start
-                            </button>
+                            <>
+                              {isRunning ? (
+                                <>
+                                  <button 
+                                    onClick={() => stopWithUrl(repo.url)} 
+                                    className="btn-stop btn-sm"
+                                    disabled={isStopping[repo.url]}
+                                  >
+                                    {isStopping[repo.url] ? 'Stopping...' : 'Stop'}
+                                  </button>
+                                  <a
+                                    href={runData.runUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="btn-icon btn-sm"
+                                    title="View Logs on GitHub"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M10.478 1.647a.5.5 0 1 0-.956-.294l-4 13a.5.5 0 0 0 .956.294l4-13zM4.854 4.146a.5.5 0 0 1 0 .708L1.707 8l3.147 3.146a.5.5 0 0 1-.708.708l-3.5-3.5a.5.5 0 0 1 0-.708l3.5-3.5a.5.5 0 0 1 .708 0zm6.292 0a.5.5 0 0 0 0 .708L14.293 8l-3.147 3.146a.5.5 0 0 0 .708.708l3.5-3.5a.5.5 0 0 0 0-.708l-3.5-3.5a.5.5 0 0 0-.708 0z"/></svg>
+                                  </a>
+                                </>
+                              ) : (
+                                <button onClick={() => startWithUrl(repo.url)} className="btn-start btn-sm" disabled={isLoading}>
+                                  Start
+                                </button>
+                              )}
+                               <button onClick={() => setEditingRepo({ id: repo.id, name: repo.name })} className="btn-icon btn-sm" title="Edit Name">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                  <path d="M12.854.146a.5.5 0 0 0-.707 0L10.5 1.793 14.207 5.5l1.647-1.646a.5.5 0 0 0 0-.708l-3-3zm.646 6.061L9.793 2.5 3.293 9H3.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.207l6.5-6.5zm-7.468 7.468A.5.5 0 0 1 6 13.5V13h-.5a.5.5 0 0 1-.5-.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.5-.5V10h-.5a.499.499 0 0 1-.175-.032l-.179.178a.5.5 0 0 0-.11.168l-2 5a.5.5 0 0 0 .65.65l5-2a.5.5 0 0 0 .168-.11l.178-.178z"/>
+                                </svg>
+                              </button>
+                              <button onClick={() => removeRepo(repo.url)} className="btn-icon btn-sm" title="Remove">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                  <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                                </svg>
+                              </button>
+                            </>
                           )}
-                          <button onClick={() => removeRepo(repo.url)} className="btn-icon btn-sm" title="Remove">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                              <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-                              <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-                            </svg>
-                          </button>
                         </div>
                       </div>
                     )
