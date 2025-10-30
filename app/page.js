@@ -25,6 +25,7 @@ export default function Home() {
   const [savedRepos, setSavedRepos] = useState([]);
   const [runsByUrl, setRunsByUrl] = useState({});
   const [nowTs, setNowTs] = useState(Date.now());
+  const [elapsedTimes, setElapsedTimes] = useState({});
 
   useEffect(() => {
     try {
@@ -60,9 +61,35 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const t = setInterval(() => setNowTs(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
+    const interval = setInterval(() => {
+      const nextElapsedTimes = {};
+      const nextRuns = { ...runsByUrl };
+      let shouldUpdateRuns = false;
+      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+      Object.entries(runsByUrl).forEach(([url, run]) => {
+        if (run && run.startTime) {
+          const elapsed = Date.now() - run.startTime;
+          
+          if (elapsed > SIX_HOURS_MS) {
+            delete nextRuns[url];
+            shouldUpdateRuns = true;
+          } else {
+            nextElapsedTimes[url] = formatElapsedTime(elapsed);
+          }
+        }
+      });
+      
+      setElapsedTimes(nextElapsedTimes);
+
+      if (shouldUpdateRuns) {
+        setRunsByUrl(nextRuns);
+        persistRuns(nextRuns);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [runsByUrl, persistRuns]);
 
   const persistRepos = (list) => { 
     setSavedRepos(list); 
@@ -159,6 +186,14 @@ export default function Home() {
   const grouped = savedRepos.reduce((acc, url) => { const meta = parseWorkflowUrl(url); const key = meta ? `${meta.owner}/${meta.repo}` : 'روابط غير معروفة'; if (!acc[key]) acc[key] = []; acc[key].push({ url, meta }); return acc; }, {});
 
   const formatElapsed = (s) => { const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); const ss = s % 60; return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`; };
+
+  const formatElapsedTime = (ms) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
 
   return (
     <>
